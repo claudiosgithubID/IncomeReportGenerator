@@ -7,18 +7,14 @@
 车辆信息处理
 '''
 
-import matplotlib as mpl
+
+from filepath import filePath as fp
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from d import D
 from datetime import datetime
 from decimal import Decimal
 from timeit import default_timer as timer
-
-mpl.font_manager.fontManager.addfont('resources/SimHei.ttf')
-mpl.rcParams['font.sans-serif'] = ['SimHei']
-mpl.rcParams['axes.unicode_minus'] = False
 
 
 class Vehicles:
@@ -93,6 +89,7 @@ class Vehicles:
 2.通行费: fee
 3.cat/cats: 类别
 4.以上所有返回复合数据的方法名前都无get,只有私有方法用_get_...
+5.最先声明__init__函数，其次类变量和类方法
 
 创建模块：
 1.d.py 对所有结果数值计算使用Python内置decimal模块，避免溢出
@@ -482,7 +479,8 @@ class Vehicles:
         df = self.frame.query(query)
         df = self._get_fee_by_group(df, 'mode')
         df['mode'] = df['mode'].map(self.decode_mode)
-        fig_path = f'fee_of_mode_{min_mode}_to_{max_mode}.png'
+        fig_path = fp(
+            f'fee_of_mode_{min_mode}_to_{max_mode}.png').as_image_file
 
         return df, fig_path
 
@@ -505,7 +503,11 @@ class Vehicles:
             per=('fee', lambda x: D(x).per(self._total_fee))
         )
         in_vs_out_df['per'] = self.normalize_per(in_vs_out_df['per'])
-        return in_vs_out_df.to_dict('records')
+
+        fig_path = fp('fee_in_vs_out.png').as_image_file
+        return {'fig_path': fig_path,
+                'rows':     in_vs_out_df.to_dict('records')
+                }
 
     def fee_of_primary_out_provinces(self, mode=(1, 16)):
         mode_min, mode_max = self.get_tuple_or_single_param(mode)
@@ -524,7 +526,8 @@ class Vehicles:
             self.decode_province)
 
         # 做图
-        fig_path = f'fee_of_primary_out_provinces_mode_{mode_min}_{mode_max}.png'
+        fig_path = fp(
+            f'fee_of_primary_out_provinces_mode_{mode_min}_{mode_max}.png').as_image_file
         return {'count': primary_df.shape[0],
                 'fee': D(primary_df['fee']).sum(),
                 'per': D(primary_df['per']).sum(),
@@ -570,7 +573,8 @@ class Vehicles:
         df['station'] = df['station'].map(
             lambda x: x[2:] if province == 'in' else x)
 
-        fig_path = f'fee_of_primary_stations_{province}_{mode_min}_{mode_max}.png'
+        fig_path = fp(
+            f'fee_of_primary_stations_{province}_{mode_min}_{mode_max}.png').as_image_file
 
         return{'cat': cat,
                'total_count': total_count,
@@ -581,7 +585,7 @@ class Vehicles:
                'fig_path': fig_path
                }
 
-    @property
+    @ property
     def fee_of_primary_modes_details(self):
         result = []
         for mode in self._primary_modes:
@@ -597,7 +601,7 @@ class Vehicles:
 
         return result
 
-    @property
+    @ property
     def fee_of_topmost_plates_of_primary_modes(self):
         result = []
         for mode in self._primary_modes:
@@ -606,7 +610,8 @@ class Vehicles:
             df = self._get_topmost_plates(df)
             detail = {}
             # 输出数据
-            fig_path = f'topmost_plates_{mode}.png'
+            fig_path = fp(f'topmost_plates_{mode}.png').as_image_file
+
             detail['mode'] = self.decode_mode(mode, simplified=False)
             detail['fee'] = D(df['fee']).sum(scale=False)
             detail['per'] = D(df['per']).sum()
@@ -621,7 +626,7 @@ class Vehicles:
     def fee_of_topmost_plates(self):
         df = self._get_topmost_plates(self.frame)
         # 输出数据
-        fig_path = 'topmost_plates.png'
+        fig_path = fp('topmost_plates.png').as_image_file
 
         return {'fee': D(df['fee']).sum(scale=False),
                 'per': D(df['per']).sum(),
@@ -667,13 +672,13 @@ normalize_per:当数据条数过多时，如按车牌获取，
 大多数情况不会出现，所以默认为True
 scale_fee:同样，数据量很大时，缩小10000倍后无意义，因为每个值就很小
 '''
-        df = frame[[by, 'fee']]
-        total_fee = D(df['fee']).sum()
-        result = df.groupby(by, as_index=False).agg(
+        df=frame[[by, 'fee']]
+        total_fee=D(df['fee']).sum()
+        result=df.groupby(by, as_index=False).agg(
             fee=('fee', lambda x: D(x).sum(scale=scale_fee, rounding=True)),
             per=('fee', lambda x: D(x).per(total_fee)))
         if normalize_per:
-            result['per'] = self.normalize_per(result['per'])
+            result['per']=self.normalize_per(result['per'])
 
         return result
 
@@ -686,19 +691,19 @@ scale_fee:同样，数据量很大时，缩小10000倍后无意义，因为每�
 
 if __name__ == '__main__':
     import os
-    excel_files_test = ['test_files/12月货车_测试.xlsx', 'test_files/12月客车_测试.xlsx']
-    excel_files = ['test_files/12月货车.xlsx', 'test_files/12月客车.xlsx']
+    excel_files_test=['test_files/12月货车_测试.xlsx', 'test_files/12月客车_测试.xlsx']
+    excel_files=['test_files/12月货车.xlsx', 'test_files/12月客车.xlsx']
 
     def get_files():
-        root = 'test_files/leshanbei_xls_fast'
-        root = 'test_files/maoqiao01'
-        list_of_files = []
+        root='test_files/leshanbei_xls_fast'
+        root='test_files/maoqiao01'
+        list_of_files=[]
         for root, dirs, files in os.walk(root):
             for f in files:
                 list_of_files.append(os.path.join(root, f))
         return list_of_files
 
-    vehicles = Vehicles(get_files())
+    vehicles=Vehicles(excel_files_test)
     # print(vehicles.frame)
     # print(vehicles.station)
     # print(vehicles.no_source_fee)
