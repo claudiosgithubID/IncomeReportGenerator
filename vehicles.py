@@ -65,10 +65,14 @@ class Vehicles:
     'primary_stations_3cats'
     从key值可推测出对应的上面函数数据，及数据结构
     }
-8.fee_of_topmost_mode_plates:所有车型主要车牌的数据
+8.fee_of_topmost_plates_of_primary_modes:所有车型主要车牌的数据
     返回list，单个元素为dict：{'mode':'一客’, fig_path:,'fee':, 'per':当前车型中通行费的占比,rows:}
     rows按通行费排序
     单个row为dict{'plate':, 'fee':, 'per':在当前车型中的占比}
+
+9.fee_of_topmost_plates:所有车辆中，通行费排序最前的车牌。当无主要车型时使用
+    返回：dict{'fee':, 'per':'rows':}
+    rows同上，只是占比为所有通行费中的占比
 
 代码结构：
 1._get_fee_by_group(self, frame, by)
@@ -99,6 +103,8 @@ class Vehicles:
         self.frame = self._read(excel_files)
         self.station = 'XXX收费站'       # 出口站名
         self.no_source_fee = 0.0  # 不明来源地的通行费
+        self._primary_mode_threhold = 25  # 主要车型通行费占比判别值
+        self._topmost_plates_count = 30   # 靠前车牌数量
         # 数据清理
         self.frame.drop_duplicates(inplace=True, ignore_index=True)
         self._get_station(excel_files[0])
@@ -109,8 +115,9 @@ class Vehicles:
         self._normalize_datetime()
         self._reduce_memory_use()
         # 最后获取精确总通行费，方便以后计算
-        # 需在数据清理完成后获取
+        # 需在数据清理完成后获取：多次调用的数值
         self._total_fee = self._get_total_fee()
+        self._primary_modes = self._get_primary_modes()
 
     DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
     PROVINCES = ['四川', '贵州', '云南', '陕西', '甘肃', '青海', '台湾', '内蒙古',
@@ -475,7 +482,7 @@ class Vehicles:
         df = self.frame.query(query)
         df = self._get_fee_by_group(df, 'mode')
         df['mode'] = df['mode'].map(self.decode_mode)
-        fig_path = f'images/fee_of_mode_{min_mode}_to_{max_mode}.png'
+        fig_path = f'fee_of_mode_{min_mode}_to_{max_mode}.png'
 
         return df, fig_path
 
@@ -517,7 +524,7 @@ class Vehicles:
             self.decode_province)
 
         # 做图
-        fig_path = f'images/fee_of_primary_out_provinces_mode_{mode_min}_{mode_max}.png'
+        fig_path = f'fee_of_primary_out_provinces_mode_{mode_min}_{mode_max}.png'
         return {'count': primary_df.shape[0],
                 'fee': D(primary_df['fee']).sum(),
                 'per': D(primary_df['per']).sum(),
@@ -559,7 +566,7 @@ class Vehicles:
         # 获取分组百分比，并取得主要数据
         df = self._get_fee_by_group(df, 'station')
         df = self.get_primary_rows(df, pct=60, max_len=30)
-        # decode收费站名称
+        # decode收费站名称如果是省内，去除'四川'
         df['station'] = df['station'].map(
             lambda x: x[2:] if province == 'in' else x)
 
@@ -574,16 +581,99 @@ class Vehicles:
                'fig_path': fig_path
                }
 
-    def _get_fee_by_group(self, frame, by):
+    @property
+    def fee_of_primary_modes_details(self):
+        result = []
+        for mode in self._primary_modes:
+            detail = {}
+            detail['mode'] = self.decode_mode(mode, simplified=False)
+            detail['provinces_count'] = self.provinces_count(mode=mode)
+            detail['in_vs_out'] = self.fee_in_vs_out_province(mode=mode)
+            detail['primary_out'] = self.fee_of_primary_out_provinces(
+                mode=mode)
+            detail['primary_stations_3cats'] = self.fee_of_primary_stations_3cats(
+                mode=mode)
+            result.append(detail)
+
+        return result
+
+    @property
+    def fee_of_topmost_plates_of_primary_modes(self):
+        result = []
+        for mode in self._primary_modes:
+            # 获取并过滤数据
+            df = self.frame[self.frame['mode'] == mode]
+            df = self._get_topmost_plates(df)
+            detail = {}
+            # 输出数据
+            fig_path = f'topmost_plates_{mode}.png'
+            detail['mode'] = self.decode_mode(mode, simplified=False)
+            detail['fee'] = D(df['fee']).sum(scale=False)
+            detail['per'] = D(df['per']).sum()
+            detail['fig_path'] = fig_path
+            detail['rows'] = df.to_dict('records')
+
+            result.append(detail)
+
+        return result
+
+    @ property
+    def fee_of_topmost_plates(self):
+        df = self._get_topmost_plates(self.frame)
+        # 输出数据
+        fig_path = 'topmost_plates.png'
+
+        return {'fee': D(df['fee']).sum(scale=False),
+                'per': D(df['per']).sum(),
+                'fig_path': fig_path,
+                'rows': df.to_dict('records')
+                }
+
+    def _get_topmost_plates(self, frame):
+        '''获取frame中排名靠前的车牌
+        返回dataFrame对象，并添加车牌下行次数的列
+        '''
+        df = self._get_fee_by_group(frame, 'plate',
+                                    scale_fee=False,
+                                    normalize_per=False)
+        # 过滤数据
+        df = df[~df['plate'].str.startswith(('默', 'WP'))]
+
+        # 排序并截取数据
+        df = df.sort_values(by='fee', ascending=False)
+        df = df.iloc[:self._topmost_plates_count]
+
+        # 添加下行次数
+        df['count'] = df['plate'].map(
+            lambda p: frame[frame['plate'] == p].shape[0])
+
+        return df
+
+    def _get_primary_modes(self):
+        '''获取主要车型，返回主要车型编号的list
+        '''
+        df = self._get_fee_by_group(self.frame, 'mode')
+        df = df[df['per'] >= self._primary_mode_threhold]
+        series = df.sort_values(by='per', ascending=False)[
+            'mode']
+        return list(series.to_dict().values())
+
+    def _get_fee_by_group(self, frame, by, scale_fee=True,
+                          normalize_per=True):
         '''获取不同分组中，各组通行费和组内总占比
-单组返回数据类型：
+单组返回数据类型：dataFrame
+normalize_per:当数据条数过多时，如按车牌获取，
+计算百分比过程中会使用四舍五入，normalize后误差会很大。
+大多数情况不会出现，所以默认为True
+scale_fee:同样，数据量很大时，缩小10000倍后无意义，因为每个值就很小
 '''
         df = frame[[by, 'fee']]
         total_fee = D(df['fee']).sum()
         result = df.groupby(by, as_index=False).agg(
-            fee=('fee', lambda x: D(x).sum(scale=True, rounding=True)),
+            fee=('fee', lambda x: D(x).sum(scale=scale_fee, rounding=True)),
             per=('fee', lambda x: D(x).per(total_fee)))
-        result['per'] = self.normalize_per(result['per'])
+        if normalize_per:
+            result['per'] = self.normalize_per(result['per'])
 
         return result
 
@@ -601,14 +691,14 @@ if __name__ == '__main__':
 
     def get_files():
         root = 'test_files/leshanbei_xls_fast'
-        # root = 'test_files/maoqiao01'
+        root = 'test_files/maoqiao01'
         list_of_files = []
         for root, dirs, files in os.walk(root):
             for f in files:
                 list_of_files.append(os.path.join(root, f))
         return list_of_files
 
-    vehicles = Vehicles(excel_files_test)
+    vehicles = Vehicles(get_files())
     # print(vehicles.frame)
     # print(vehicles.station)
     # print(vehicles.no_source_fee)
@@ -626,3 +716,7 @@ if __name__ == '__main__':
     # print(vehicles.fee_of_primary_out_provinces(mode=16))
     # for cat in ['all', 'in', 'out']:
     # print(vehicles.fee_of_primary_stations_3cats())
+    # print(vehicles._get_primary_modes())
+    # print(vehicles.fee_of_primary_modes_details)
+    print(vehicles.fee_of_topmost_plates_of_primary_modes)
+    print(vehicles.fee_of_topmost_plates)

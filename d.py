@@ -76,7 +76,7 @@ class D:
         '''
         对pandas的series进行累加
         '''
-        return reduce(lambda x, y: x+Decimal(y), self.series, Decimal('0'))
+        return reduce(lambda x, y: x+self.to_decimal(y), self.series, Decimal('0'))
 
     def sum(self, scale=False, rounding=False):
         '''求Series对象的总和，支持缩放和默认保留两位小数
