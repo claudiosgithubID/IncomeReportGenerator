@@ -4,4 +4,7 @@ pandas
 numpy
 matplotlib==3.5.1
 seaborn
+python-docx
 docxtpl
+kivy[base]
+kivy_examples

@@ -22,6 +22,8 @@ FW = 8  # full width 缩写 全屏宽度
 mpl.style.use('ggplot')
 mpl.rcParams['savefig.dpi'] = 1000  # 测试用100,实际使用时用1000
 
+nn
+
 
 def bar_for_full_width(rows, image_path, title,
                        ylabel='通行费（万元）',

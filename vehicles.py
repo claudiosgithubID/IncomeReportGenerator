@@ -8,12 +8,13 @@
 '''
 
 
-from filepath import filePath as fp
 import numpy as np
 import pandas as pd
 from d import D
 from datetime import datetime
 from decimal import Decimal
+from draw import Draw
+from filepath import filePath as fp
 from timeit import default_timer as timer
 
 
@@ -94,14 +95,22 @@ class Vehicles:
 创建模块：
 1.d.py 对所有结果数值计算使用Python内置decimal模块，避免溢出
 2.file_util:自动创建文件夹，以及实现代码中只出现文件名，自动生成绝对路径。
+
+图片：
+处理数据时生成图片。目的，尝试将dataframe对象传递给seaborn做图
 '''
 
     def __init__(self, excel_files):
+        begin = timer()
         self.frame = self._read(excel_files)
+        end = timer()
+        self.nrows_read = self.frame.shape[0]
+        self.time_spent = round(end-begin, 2)
+
         self.station = 'XXX收费站'       # 出口站名
         self.no_source_fee = 0.0  # 不明来源地的通行费
-        self._primary_mode_threhold = 25  # 主要车型通行费占比判别值
-        self._topmost_plates_count = 30   # 靠前车牌数量
+        self.primary_mode_threhold = 25  # 主要车型通行费占比判别值
+        self.topmost_plates_count = 30   # 靠前车牌数量
         # 数据清理
         self.frame.drop_duplicates(inplace=True, ignore_index=True)
         self._get_station(excel_files[0])
@@ -157,13 +166,13 @@ class Vehicles:
         为使用Series.idmax方法，需提前获取最大值索引和数值
         '''
         # 获取最大百分比位置，和数值
-        idx_max = per_col.idxmax()
+        idx_max = per_col.argmax()
         value_max = per_col[idx_max]
 
         per_col = per_col.copy().astype(np.str_)
         total = D(per_col).sum()
         diff = D.minus(total, 100)
-        # print(f'total={total}, diff={diff}')
+        # print(f'total={total}, diff={diff}, max={value_max}')
         if diff == Decimal('0'):
             return per_col.map(lambda p: float(Decimal(p)))
         # 用最大百分比减去差值
@@ -253,11 +262,8 @@ class Vehicles:
         usecols = col_rename.keys()
         engine = 'openpyxl'
         frames = []
-        begin = timer()
         for excel_file in excel_files:
-            # with open(excel_file, 'rb') as xls:
-            #     # with pd.ExcelFile(excel_file) as xls:
-            print(f'正在读取文件：{excel_file}')
+            print(excel_file)
             frame = pd.read_excel(excel_file,
                                   names=None,  # 读取所有sheets
                                   header=header,
@@ -269,8 +275,6 @@ class Vehicles:
             frames.append(frame)
 
         frame = pd.concat(frames, ignore_index=True)
-        end = timer()
-        print(f'读取用时：{end-begin}秒')
         frame.rename(columns=col_rename, inplace=True)
         return frame
 
@@ -418,8 +422,7 @@ class Vehicles:
     def fee_of_all_modes(self):
         df, fig_path = self._get_fee_by_mode((1, 16))
 
-        ax = sns.barplot(data=df, x='mode', y='fee', palette='Blues_d')
-        ax.figure.savefig(fig_path)
+        Draw(df, fig_path).for_all_modes()
 
         return {'rows': df.to_dict('records'),
                 'fig_path': fig_path}
@@ -453,19 +456,14 @@ class Vehicles:
 
     def _fee_of_cars(self):
         df, fig_path = self._get_fee_by_mode((1, 4))
-        ax = sns.barplot(data=df, x='mode', y='fee',
-                         orient='v', palette='Blues_d')
-        ax.figure.savefig(fig_path)
+        Draw(df, fig_path).for_cars_and_trucks()
 
         return {'rows': df.to_dict('records'),
                 'fig_path': fig_path}
 
     def _fee_of_trucks(self):
         df, fig_path = self._get_fee_by_mode((11, 16))
-        ax = sns.barplot(data=df, x='mode', y='fee',
-                         orient='v', palette='Blues_d')
-        ax.figure.savefig(fig_path)
-
+        Draw(df, fig_path).for_cars_and_trucks()
         rows = list(df.itertuples(index=False))
         return {'rows': df.to_dict('records'),
                 'fig_path': fig_path}
@@ -484,6 +482,10 @@ class Vehicles:
 
         return df, fig_path
 
+    @property
+    def count_of_all_provinces(self):
+        return self.provinces_count()
+
     def provinces_count(self, mode=(1, 16)):
         '获取所有省份个数'
         mode_min, mode_max = self.get_tuple_or_single_param(mode)
@@ -491,7 +493,11 @@ class Vehicles:
             f'(mode >= {mode_min} & (mode <= {mode_max}))')['province']
         return province_col.nunique()
 
-    def fee_in_vs_out_province(self, mode=(1, 16)):
+    @property
+    def fee_of_in_vs_out_province_all_modes(self):
+        return self.fee_of_in_vs_out_provinces()
+
+    def fee_of_in_vs_out_provinces(self, mode=(1, 16)):
         mode_min, mode_max = self.get_tuple_or_single_param(mode)
         df = self.frame[['province', 'fee', 'mode']].query(
             f'(mode >= {mode_min}) & (mode <= {mode_max})')
@@ -504,10 +510,16 @@ class Vehicles:
         )
         in_vs_out_df['per'] = self.normalize_per(in_vs_out_df['per'])
 
-        fig_path = fp('fee_in_vs_out.png').as_image_file
+        fig_path = fp(f'fee_in_vs_out_{mode_min}_{mode_max}.png').as_image_file
+        Draw(in_vs_out_df, fig_path).for_in_vs_out()
+
         return {'fig_path': fig_path,
                 'rows':     in_vs_out_df.to_dict('records')
                 }
+
+    @property
+    def fee_of_primary_out_provinces_all_modes(self):
+        return self.fee_of_primary_out_provinces()
 
     def fee_of_primary_out_provinces(self, mode=(1, 16)):
         mode_min, mode_max = self.get_tuple_or_single_param(mode)
@@ -528,12 +540,18 @@ class Vehicles:
         # 做图
         fig_path = fp(
             f'fee_of_primary_out_provinces_mode_{mode_min}_{mode_max}.png').as_image_file
+        Draw(primary_df, fig_path).for_primary()
+
         return {'count': primary_df.shape[0],
                 'fee': D(primary_df['fee']).sum(),
                 'per': D(primary_df['per']).sum(),
-                'rows': primary_df.to_dict('records'),
+                # 'rows': primary_df.to_dict('records'),
                 'fig_path': fig_path
                 }
+
+    @property
+    def fee_of_primary_stations_3cats_of_all_modes(self):
+        return self.fee_of_primary_stations_3cats()
 
     def fee_of_primary_stations_3cats(self, mode=(1, 16)):
         result = []
@@ -562,7 +580,7 @@ class Vehicles:
         # 获取满足条件的df
         query = f'(mode>={mode_min})&(mode<={mode_max})&\
 (province>={province_min})&(province<={province_max})'
-        print(query)
+        # print(query)
         df = self.frame.query(query)[['station', 'fee']]
         # 获取省份范围内的所有收费站数量
         total_count = df['station'].nunique()
@@ -575,6 +593,8 @@ class Vehicles:
 
         fig_path = fp(
             f'fee_of_primary_stations_{province}_{mode_min}_{mode_max}.png').as_image_file
+
+        Draw(df, fig_path).for_primary()
 
         return{'cat': cat,
                'total_count': total_count,
@@ -592,7 +612,7 @@ class Vehicles:
             detail = {}
             detail['mode'] = self.decode_mode(mode, simplified=False)
             detail['provinces_count'] = self.provinces_count(mode=mode)
-            detail['in_vs_out'] = self.fee_in_vs_out_province(mode=mode)
+            detail['in_vs_out'] = self.fee_of_in_vs_out_provinces(mode=mode)
             detail['primary_out'] = self.fee_of_primary_out_provinces(
                 mode=mode)
             detail['primary_stations_3cats'] = self.fee_of_primary_stations_3cats(
@@ -611,6 +631,7 @@ class Vehicles:
             detail = {}
             # 输出数据
             fig_path = fp(f'topmost_plates_{mode}.png').as_image_file
+            Draw(df, fig_path).for_topmost_plates()
 
             detail['mode'] = self.decode_mode(mode, simplified=False)
             detail['fee'] = D(df['fee']).sum(scale=False)
@@ -627,6 +648,7 @@ class Vehicles:
         df = self._get_topmost_plates(self.frame)
         # 输出数据
         fig_path = fp('topmost_plates.png').as_image_file
+        Draw(df, fig_path).for_topmost_plates()
 
         return {'fee': D(df['fee']).sum(scale=False),
                 'per': D(df['per']).sum(),
@@ -646,7 +668,7 @@ class Vehicles:
 
         # 排序并截取数据
         df = df.sort_values(by='fee', ascending=False)
-        df = df.iloc[:self._topmost_plates_count]
+        df = df.iloc[:self.topmost_plates_count]
 
         # 添加下行次数
         df['count'] = df['plate'].map(
@@ -654,11 +676,18 @@ class Vehicles:
 
         return df
 
+    @property
+    def primary_modes(self):
+        modes = []
+        for m in self._get_primary_modes():
+            modes.append(self.decode_mode(m, simplified=False))
+        return modes
+
     def _get_primary_modes(self):
         '''获取主要车型，返回主要车型编号的list
         '''
         df = self._get_fee_by_group(self.frame, 'mode')
-        df = df[df['per'] >= self._primary_mode_threhold]
+        df = df[df['per'] >= self.primary_mode_threhold]
         series = df.sort_values(by='per', ascending=False)[
             'mode']
         return list(series.to_dict().values())
@@ -672,13 +701,13 @@ normalize_per:当数据条数过多时，如按车牌获取，
 大多数情况不会出现，所以默认为True
 scale_fee:同样，数据量很大时，缩小10000倍后无意义，因为每个值就很小
 '''
-        df=frame[[by, 'fee']]
-        total_fee=D(df['fee']).sum()
-        result=df.groupby(by, as_index=False).agg(
+        df = frame[[by, 'fee']]
+        total_fee = D(df['fee']).sum()
+        result = df.groupby(by, as_index=False).agg(
             fee=('fee', lambda x: D(x).sum(scale=scale_fee, rounding=True)),
             per=('fee', lambda x: D(x).per(total_fee)))
         if normalize_per:
-            result['per']=self.normalize_per(result['per'])
+            result['per'] = self.normalize_per(result['per'])
 
         return result
 
@@ -691,20 +720,20 @@ scale_fee:同样，数据量很大时，缩小10000倍后无意义，因为每�
 
 if __name__ == '__main__':
     import os
-    excel_files_test=['test_files/12月货车_测试.xlsx', 'test_files/12月客车_测试.xlsx']
-    excel_files=['test_files/12月货车.xlsx', 'test_files/12月客车.xlsx']
+    excel_files_test = ['test_files/12月货车_测试.xlsx', 'test_files/12月客车_测试.xlsx']
+    excel_files = ['test_files/12月货车.xlsx', 'test_files/12月客车.xlsx']
 
     def get_files():
-        root='test_files/leshanbei_xls_fast'
-        root='test_files/maoqiao01'
-        list_of_files=[]
+        root = 'test_files/leshanbei_xls_fast'
+        # root='test_files/maoqiao01'
+        list_of_files = []
         for root, dirs, files in os.walk(root):
             for f in files:
                 list_of_files.append(os.path.join(root, f))
         return list_of_files
 
-    vehicles=Vehicles(excel_files_test)
-    # print(vehicles.frame)
+    vehicles = Vehicles(excel_files_test)
+    print(vehicles.frame)
     # print(vehicles.station)
     # print(vehicles.no_source_fee)
     # vehicles.show()
@@ -723,5 +752,5 @@ if __name__ == '__main__':
     # print(vehicles.fee_of_primary_stations_3cats())
     # print(vehicles._get_primary_modes())
     # print(vehicles.fee_of_primary_modes_details)
-    print(vehicles.fee_of_topmost_plates_of_primary_modes)
-    print(vehicles.fee_of_topmost_plates)
+    # print(vehicles.fee_of_topmost_plates_of_primary_modes)
+    # print(vehicles.fee_of_topmost_plates)
